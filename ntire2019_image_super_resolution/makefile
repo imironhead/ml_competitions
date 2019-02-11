@@ -1,0 +1,66 @@
+TIMESTAMP=$(shell date +%Y%m%d%H%M%S)
+
+HOST_LAURANA=192.168.0.16
+
+PATH_DATASET_RAW=/home/ironhead/datasets/ntire2019_raw/RealSR/
+PATH_DATASET_COMPETITION=/home/ironhead/datasets/ntire2019_raw/RealSR/
+PATH_DATASET_TRAINING_SOURCE=$(PATH_DATASET_COMPETITION)training_lr/
+PATH_DATASET_TRAINING_TARGET=$(PATH_DATASET_COMPETITION)training_hr/
+PATH_DATASET_VALIDATION_SOURCE=$(PATH_DATASET_COMPETITION)temp_validation_lr/
+PATH_DATASET_VALIDATION_TARGET=$(PATH_DATASET_COMPETITION)temp_validation_hr/
+PATH_DATASET_TESTING_SOURCE=$(PATH_DATASET_COMPETITION)validation_lr/
+
+PATH_PROJECT=/home/ironhead/projects/ml_competitions/ntire2019_image_super_resolution/
+
+
+deploy-laurana:
+	scp makefile *.py $(HOST_LAURANA):$(PATH_PROJECT)
+
+
+EXP_TRAIN_CHECKPOINT_PATH=$(PATH_PROJECT)checkpoints/$(TIMESTAMP)/
+EXP_TRAIN_SUMMARY_PATH=$(PATH_PROJECT)summary/$(TIMESTAMP)/
+EXP_TRAIN_TRAINING_BATCH_SIZE=128
+EXP_TRAIN_TRAINING_BATCH_SIZE_MULTIPLIER=1
+EXP_TRAIN_TRAINING_IMAGE_SIZE=128
+EXP_TRAIN_TRAINING_STOP_STEP=30
+EXP_TRAIN_TRAINING_LEARNING_RATE=0.01
+EXP_TRAIN_TRAINING_LRS_STOP_STEP=0
+EXP_TRAIN_TRAINING_LRS_INITIAL_RATE=0.0
+EXP_TRAIN_TRAINING_LRS_INCREASING_RATE=0.0
+EXP_TRAIN_VALIDATION_CYCLE=10
+EXP_TRAIN_VALIDATION_BATCH_SIZE=32
+EXP_TRAIN_VALIDATION_BATCH_SIZE_MULTIPLIER=1
+EXP_TRAIN_VALIDATION_IMAGE_SIZE=128
+EXP_TRAIN_TESTING_BATCH_SIZE=128
+EXP_TRAIN_TESTING_RESULT_PATH=./results/$(TIMESTAMP).zip
+
+train:
+	pipenv run python experiment_train.py \
+		--checkpoint_path=$(EXP_TRAIN_CHECKPOINT_PATH) \
+		--summary_path=$(EXP_TRAIN_SUMMARY_PATH) \
+		--training_image_source_dir_path=$(PATH_DATASET_TRAINING_SOURCE) \
+		--training_image_target_dir_path=$(PATH_DATASET_TRAINING_TARGET) \
+		--training_batch_size=$(EXP_TRAIN_TRAINING_BATCH_SIZE) \
+		--training_batch_size_multiplier=$(EXP_TRAIN_TRAINING_BATCH_SIZE_MULTIPLIER) \
+		--training_image_size=$(EXP_TRAIN_TRAINING_IMAGE_SIZE) \
+		--training_stop_step=$(EXP_TRAIN_TRAINING_STOP_STEP) \
+		--training_learning_rate=$(EXP_TRAIN_TRAINING_LEARNING_RATE) \
+		--training_lrs_stop_step=$(EXP_TRAIN_TRAINING_LRS_STOP_STEP) \
+		--training_lrs_initial_rate=$(EXP_TRAIN_TRAINING_LRS_INITIAL_RATE) \
+		--training_lrs_increasing_rate=$(EXP_TRAIN_TRAINING_LRS_INCREASING_RATE) \
+		--validation_image_source_dir_path=$(PATH_DATASET_VALIDATION_SOURCE) \
+		--validation_image_target_dir_path=$(PATH_DATASET_VALIDATION_TARGET) \
+		--validation_cycle=$(EXP_TRAIN_VALIDATION_CYCLE) \
+		--validation_batch_size=$(EXP_TRAIN_VALIDATION_BATCH_SIZE) \
+		--validation_batch_size_multiplier=$(EXP_TRAIN_VALIDATION_BATCH_SIZE_MULTIPLIER) \
+		--validation_image_size=$(EXP_TRAIN_VALIDATION_IMAGE_SIZE) \
+		--testing_image_source_dir_path=$(PATH_DATASET_TESTING_SOURCE) \
+		--testing_batch_size=$(EXP_TRAIN_TESTING_BATCH_SIZE) \
+		--testing_result_path=$(EXP_TRAIN_TESTING_RESULT_PATH)
+
+search-learning-rate: EXP_TRAIN_SUMMARY_PATH=$(PATH_PROJECT)summary/lrs_$(TIMESTAMP)/
+search-learning-rate: EXP_TRAIN_TRAINING_LRS_STOP_STEP=10000
+search-learning-rate: EXP_TRAIN_TRAINING_LRS_INITIAL_RATE=0.001
+search-learning-rate: EXP_TRAIN_TRAINING_LRS_INCREASING_RATE=0.0001
+search-learning-rate: train
+
