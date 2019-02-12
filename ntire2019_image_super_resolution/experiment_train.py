@@ -11,7 +11,7 @@ import tensorflow as tf
 import zipfile
 
 import dataset
-import model_ae
+import model_perceptual
 
 
 def build_dataset():
@@ -66,7 +66,7 @@ def build_model(data):
     FLAGS = tf.app.flags.FLAGS
 
     # NOTE: create the model
-    model = model_ae.build_model(
+    model = model_perceptual.build_model(
         data['source_images_placeholder'], data['target_images_placeholder'])
 
     # NOTE: enhance the model with metrics
