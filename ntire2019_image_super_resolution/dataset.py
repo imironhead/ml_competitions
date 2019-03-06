@@ -1,9 +1,11 @@
 """
 """
+import itertools
 import os
 
 import imageio
 import numpy as np
+import scipy.misc
 import tensorflow as tf
 
 
@@ -86,11 +88,27 @@ class TrainingDataset:
             source_path = self._path_pool[index]['source_path']
             target_path = self._path_pool[index]['target_path']
 
-            source_image = imageio.imread(source_path).astype(np.float32)
-            target_image = imageio.imread(target_path).astype(np.float32)
+            source_image = imageio.imread(source_path)
+            target_image = imageio.imread(target_path)
 
-            source_image = source_image / 127.5 - 1.0
-            target_image = target_image / 127.5 - 1.0
+            if np.random.choice([True, False]):
+                h, w, _ = source_image.shape
+
+                h = np.random.randint(h * 990 // 1000, h)
+                w = np.random.randint(w * 990 // 1000, w)
+
+                source_image = scipy.misc.imresize(
+                    source_image,
+                    (h, w),
+                    interp='bicubic')
+
+                target_image = scipy.misc.imresize(
+                    target_image,
+                    (h, w),
+                    interp='bicubic')
+
+            source_image = scipy.ndimage.gaussian_filter(
+                source_image, sigma=0.5, mode='nearest')
 
             self._data_pool.append({
                 'source_path': source_path,
@@ -108,10 +126,21 @@ class TrainingDataset:
         self.refresh_pool()
 
         # NOTE: collect one batch
-        shape = (self._batch_size, self._image_size, self._image_size, 3)
+        batch_size = self._batch_size
+        patch_size_4x = self._image_size
+        patch_size_2x = patch_size_4x // 2
+        patch_size_1x = patch_size_4x // 4
 
-        source_images = np.zeros(shape, dtype=np.float32)
-        target_images = np.zeros(shape, dtype=np.float32)
+        shape_1x = (batch_size, patch_size_1x, patch_size_1x, 3)
+        shape_2x = (batch_size, patch_size_2x, patch_size_2x, 3)
+        shape_4x = (batch_size, patch_size_4x, patch_size_4x, 3)
+
+        source_patches_1x = np.zeros(shape_1x, dtype=np.float32)
+        source_patches_2x = np.zeros(shape_2x, dtype=np.float32)
+        source_patches_4x = np.zeros(shape_4x, dtype=np.float32)
+        target_patches_1x = np.zeros(shape_1x, dtype=np.float32)
+        target_patches_2x = np.zeros(shape_2x, dtype=np.float32)
+        target_patches_4x = np.zeros(shape_4x, dtype=np.float32)
 
         for i in range(self._batch_size):
             j = np.random.randint(len(self._data_pool))
@@ -119,7 +148,7 @@ class TrainingDataset:
             source_image = self._data_pool[j]['source_image']
             target_image = self._data_pool[j]['target_image']
 
-            s = self._image_size
+            s = patch_size_4x
 
             h, w, _ = source_image.shape
 
@@ -127,29 +156,62 @@ class TrainingDataset:
             y = np.random.randint(h - s)
             x = np.random.randint(w - s)
 
-            source_patch = source_image[y:y+s, x:x+s]
-            target_patch = target_image[y:y+s, x:x+s]
+            source_patch_4x = source_image[y:y+s, x:x+s]
+            target_patch_4x = target_image[y:y+s, x:x+s]
 
             # NOTE: augmentation, flip vertically
             if np.random.choice([True, False]):
-                source_patch = source_patch[::-1, ::]
-                target_patch = target_patch[::-1, ::]
-
+                source_patch_4x = source_patch_4x[::-1, ::]
+                target_patch_4x = target_patch_4x[::-1, ::]
 
             # NOTE: augmentation, flip horizontally
             if np.random.choice([True, False]):
-                source_patch = source_patch[::, ::-1]
-                target_patch = target_patch[::, ::-1]
+                source_patch_4x = source_patch_4x[::, ::-1]
+                target_patch_4x = target_patch_4x[::, ::-1]
 
             # NOTE: augmentation, transpose x-y axis
             if np.random.choice([True, False]):
-                source_patch = np.transpose(source_patch, [1, 0, 2])
-                target_patch = np.transpose(target_patch, [1, 0, 2])
+                source_patch_4x = np.transpose(source_patch_4x, [1, 0, 2])
+                target_patch_4x = np.transpose(target_patch_4x, [1, 0, 2])
 
-            source_images[i] = source_patch
-            target_images[i] = target_patch
+            source_patch_1x = scipy.misc.imresize(
+                source_patch_4x,
+                (patch_size_1x, patch_size_1x),
+                interp='bicubic')
+            source_patch_2x = scipy.misc.imresize(
+                source_patch_4x,
+                (patch_size_2x, patch_size_2x),
+                interp='bicubic')
+            target_patch_1x = scipy.misc.imresize(
+                target_patch_4x,
+                (patch_size_1x, patch_size_1x),
+                interp='bicubic')
+            target_patch_2x = scipy.misc.imresize(
+                target_patch_4x,
+                (patch_size_2x, patch_size_2x),
+                interp='bicubic')
 
-        return source_images, target_images
+            source_patch_1x = source_patch_1x.astype(np.float32) / 127.5 - 1.0
+            source_patch_2x = source_patch_2x.astype(np.float32) / 127.5 - 1.0
+            source_patch_4x = source_patch_4x.astype(np.float32) / 127.5 - 1.0
+            target_patch_1x = target_patch_1x.astype(np.float32) / 127.5 - 1.0
+            target_patch_2x = target_patch_2x.astype(np.float32) / 127.5 - 1.0
+            target_patch_4x = target_patch_4x.astype(np.float32) / 127.5 - 1.0
+
+            source_patches_1x[i] = source_patch_1x
+            source_patches_2x[i] = source_patch_2x
+            source_patches_4x[i] = source_patch_4x
+            target_patches_1x[i] = target_patch_1x
+            target_patches_2x[i] = target_patch_2x
+            target_patches_4x[i] = target_patch_4x
+
+        return {
+            'source_patches_1x': source_patches_1x,
+            'source_patches_2x': source_patches_2x,
+            'source_patches_4x': source_patches_4x,
+            'target_patches_1x': target_patches_1x,
+            'target_patches_2x': target_patches_2x,
+            'target_patches_4x': target_patches_4x,}
 
 
 class TestImage:
@@ -158,91 +220,169 @@ class TestImage:
     def __init__(self, **kwargs):
         """
         source_image_path
+        target_image_path
         patch_size
-        overlap_size
+        cover_size
         """
-        self._patch_size = kwargs.get('patch_size', 64)
-        self._overlap_size = kwargs.get('overlap_size', 16)
-
         source_image_path = kwargs.get('source_image_path', None)
+        target_image_path = kwargs.get('target_image_path', None)
 
-        # NOTE: sanity check, patch_size must be greater then 2 x overlap_size
-        if self._patch_size <= 2 * self._overlap_size:
-            raise Exception('invalid patch_size & overlap_size')
-
-        # NOTE: sanity check, the image must exist
-        if source_image_path is None or not tf.gfile.Exists(source_image_path):
+        # NOTE: sanity check, the source image must exist
+        if source_image_path is None:
             raise Exception('source_image_path must exist')
 
-        image = imageio.imread(source_image_path).astype(np.float32)
-        image = image / 127.5 - 1.0
+        if not tf.gfile.Exists(source_image_path):
+            raise Exception('source_image_path must exist')
 
-        self._image_height = image.shape[0]
-        self._image_width = image.shape[1]
+        if target_image_path is None:
+            target_image_uint8 = None
+        elif not tf.gfile.Exists(target_image_path):
+            raise Exception('target_image_path is invalid')
+        else:
+            self._target_image_uint8 = imageio.imread(target_image_path)
 
-        h, w, _ = image.shape
+        self._source_image_uint8 = imageio.imread(source_image_path)
+        self._source_image_uint8 = scipy.ndimage.gaussian_filter(
+            self._source_image_uint8, sigma=0.5, mode='nearest')
+        self._result_image_uint8 = np.zeros_like(self._source_image_uint8)
 
-        p, o = self._patch_size, self._overlap_size
+        self._patch_size = patch_size = kwargs.get('patch_size', 64)
+        self._cover_size = cover_size = kwargs.get('cover_size', 16)
 
-        z = p - 2 * o
+        # NOTE: sanity check, patch_size must be greater then 2 x cover_size
+        if self._patch_size <= 2 * self._cover_size:
+            raise Exception('invalid patch_size & cover_size')
 
-        ch, cw = (h + z - 1) // z, (w + z - 1) // z
+        image_h, image_w, _ = self._source_image_uint8.shape
 
-        temp_image = np.zeros((ch * z + 2 * o, cw * z + 2 * o, 3), np.float32)
+        num_patch_h = (image_h + patch_size - 4 * cover_size - 1) \
+            // (patch_size - 2 * cover_size)
+        num_patch_w = (image_w + patch_size - 4 * cover_size - 1) \
+            // (patch_size - 2 * cover_size)
 
-        temp_image[o:o+h, o:o+w] = image
+        self._source_patches_f32 = []
 
-        self._tiles = []
+        for y, x in itertools.product(range(num_patch_h), range(num_patch_w)):
+            # NOTE: crop a patch
+            patch_x = \
+                min(x * (patch_size - 2 * cover_size), image_w - patch_size)
+            patch_y = \
+                min(y * (patch_size - 2 * cover_size), image_h - patch_size)
 
-        for y in range(ch):
-            for x in range(cw):
-                ty, tx = y * z, x * z
+            patch_4x = self._source_image_uint8[
+                patch_y:patch_y+patch_size, patch_x:patch_x+patch_size]
 
-                self._tiles.append(temp_image[ty:ty+p, tx:tx+p: ])
+            patch_1x = scipy.misc.imresize(
+                patch_4x, (patch_size // 4, patch_size // 4), interp='bicubic')
 
-        self._tiles = np.stack(self._tiles)
+            patch_1x = patch_1x.astype(np.float32) / 127.5 - 1.0
 
-    def num_tiles(self):
+            patch_2x = scipy.misc.imresize(
+                patch_4x, (patch_size // 2, patch_size // 2), interp='bicubic')
+
+            patch_2x = patch_2x.astype(np.float32) / 127.5 - 1.0
+
+            patch_4x = patch_4x.astype(np.float32) / 127.5 - 1.0
+
+            # NOTE: mapping information
+            if x == 0 or x + 1 == num_patch_w:
+                map_w = patch_size - cover_size
+            else:
+                map_w = patch_size - cover_size * 2
+
+            if y == 0 or y + 1 == num_patch_h:
+                map_h = patch_size - cover_size
+            else:
+                map_h = patch_size - cover_size * 2
+
+            map_source_x = (0 if x == 0 else cover_size)
+            map_source_y = (0 if y == 0 else cover_size)
+
+            if x == 0:
+                map_target_x = 0
+            else:
+                map_target_x = patch_x + cover_size
+
+            if y == 0:
+                map_target_y = 0
+            else:
+                map_target_y = patch_y + cover_size
+
+            self._source_patches_f32.append({
+                'patch_1x': patch_1x,
+                'patch_2x': patch_2x,
+                'patch_4x': patch_4x,
+                'map_source_x': map_source_x,
+                'map_source_y': map_source_y,
+                'map_target_x': map_target_x,
+                'map_target_y': map_target_y,
+                'map_w': map_w,
+                'map_h': map_h})
+
+    def num_patches(self):
         """
         """
-        return self._tiles.shape[0]
+        return len(self._source_patches_f32)
 
-    def get_low_resolution_tiles(self, begin, end):
+    def get_source_patches(self, begin, end):
         """
         """
-        return self._tiles[begin:end]
+        patches = self._source_patches_f32[begin:end]
 
-    def set_super_resolved_tiles(self, tiles, begin):
+        patches_1x = [patch['patch_1x'] for patch in patches]
+        patches_2x = [patch['patch_2x'] for patch in patches]
+        patches_4x = [patch['patch_4x'] for patch in patches]
+
+        return np.stack(patches_1x), np.stack(patches_2x), np.stack(patches_4x)
+
+    def set_result_patches(self, patches, begin):
         """
         """
-        self._tiles[begin:begin+tiles.shape[0]] = tiles
+        for i in range(patches.shape[0]):
+            info = self._source_patches_f32[begin+i]
 
-    def save_super_resolved_image(self, path):
+            patch = np.clip(patches[i] * 127.5 + 127.5, 0.0, 255.0)
+            patch = patch.astype(np.uint8)
+
+            m_s_x = info['map_source_x']
+            m_s_y = info['map_source_y']
+            m_t_x = info['map_target_x']
+            m_t_y = info['map_target_y']
+            m_w = info['map_w']
+            m_h = info['map_h']
+
+            self._result_image_uint8[m_t_y:m_t_y+m_h, m_t_x:m_t_x+m_w] = \
+                patch[m_s_y:m_s_y+m_h, m_s_x:m_s_x+m_w]
+
+    def save_result_image(self, path):
         """
         """
-        h, w = self._image_height, self._image_width
+        imageio.imwrite(path, self._result_image_uint8, 'png')
 
-        p, o = self._patch_size, self._overlap_size
+    def psnr(self):
+        """
+        """
+        if self._result_image_uint8 is None:
+            return 0.0
 
-        z = p - 2 * o
+        target_image = self._target_image_uint8.astype(np.float32)
+        result_image = self._result_image_uint8.astype(np.float32)
 
-        ch, cw = (h + z - 1) // z, (w + z - 1) // z
+        mse = np.mean(np.square(target_image - result_image))
 
-        image = np.zeros((ch * z, cw * z, 3), np.float32)
+        return 10.0 * np.log10(65025.0 / mse)
 
-        i = 0
+    def sample(self, height=128):
+        if self._result_image_uint8 is None:
+            return None
 
-        for y in range(0, ch * z, z):
-            for x in range(0, cw * z, z):
-                image[y:y+z, x:x+z] = self._tiles[i, o:o+z, o:o+z]
+        ty = np.random.randint(self._source_image_uint8.shape[0] - height)
 
-                i += 1
-
-        image = image[:self._image_height, :self._image_width]
-
-        image = np.clip(image * 127.5 + 127.5, 0.0, 255.0)
-
-        image = image.astype(np.uint8)
-
-        imageio.imwrite(path, image, 'png')
+        return np.concatenate([
+            self._source_image_uint8[:height],
+            self._result_image_uint8[:height],
+            self._target_image_uint8[:height],
+            self._source_image_uint8[ty:ty+height],
+            self._result_image_uint8[ty:ty+height],
+            self._target_image_uint8[ty:ty+height]], axis=0)
 

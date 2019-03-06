@@ -19,6 +19,20 @@ def build_dataset():
     """
     FLAGS = tf.app.flags.FLAGS
 
+    # NOTE: placeholders
+    source_images_1x_placeholder = tf.placeholder(
+        shape=(None, None, None, 3), dtype=tf.float32, name='source_images_1x')
+    source_images_2x_placeholder = tf.placeholder(
+        shape=(None, None, None, 3), dtype=tf.float32, name='source_images_2x')
+    source_images_4x_placeholder = tf.placeholder(
+        shape=(None, None, None, 3), dtype=tf.float32, name='source_images_4x')
+    target_images_1x_placeholder = tf.placeholder(
+        shape=(None, None, None, 3), dtype=tf.float32, name='target_images_1x')
+    target_images_2x_placeholder = tf.placeholder(
+        shape=(None, None, None, 3), dtype=tf.float32, name='target_images_2x')
+    target_images_4x_placeholder = tf.placeholder(
+        shape=(None, None, None, 3), dtype=tf.float32, name='target_images_4x')
+
     # NOTE: build training dataset generator
     training_dataset = dataset.TrainingDataset(
         source_dir_path=FLAGS.training_image_source_dir_path,
@@ -28,31 +42,33 @@ def build_dataset():
         pool_size=5,
         refresh_rate=8)
 
-    # NOTE: build validation dataset generator
-    validation_dataset = dataset.TrainingDataset(
-        source_dir_path=FLAGS.validation_image_source_dir_path,
-        target_dir_path=FLAGS.validation_image_target_dir_path,
-        batch_size=FLAGS.validation_batch_size,
-        image_size=FLAGS.validation_image_size,
-        pool_size=1,
-        refresh_rate=128)
+    # NOTE: build validation image
+    test_image_names = tf.gfile.ListDirectory(
+        FLAGS.validation_image_source_dir_path)
+
+    source_image_path = os.path.join(
+        FLAGS.validation_image_source_dir_path, test_image_names[0])
+    target_image_path = os.path.join(
+        FLAGS.validation_image_target_dir_path, test_image_names[0])
+
+    validation_image = dataset.TestImage(
+        source_image_path=source_image_path,
+        target_image_path=target_image_path,
+        patch_size=FLAGS.testing_patch_size,
+        cover_size=FLAGS.testing_overlapping_size)
 
     # NOTE: structure of test dataset is different from training & validation
     #       sets. do the ETL in test phase.
 
-    # NOTE: placeholders
-    batch_shape = (None, FLAGS.training_image_size, FLAGS.training_image_size, 3)
-
-    source_images_placeholder = tf.placeholder(
-        shape=batch_shape, dtype=tf.float32, name='source_images')
-    target_images_placeholder = tf.placeholder(
-        shape=batch_shape, dtype=tf.float32, name='target_images')
-
     return {
         'training_dataset': training_dataset,
-        'validation_dataset': validation_dataset,
-        'source_images_placeholder': source_images_placeholder,
-        'target_images_placeholder': target_images_placeholder,
+        'validation_image': validation_image,
+        'source_images_1x_placeholder': source_images_1x_placeholder,
+        'source_images_2x_placeholder': source_images_2x_placeholder,
+        'source_images_4x_placeholder': source_images_4x_placeholder,
+        'target_images_1x_placeholder': target_images_1x_placeholder,
+        'target_images_2x_placeholder': target_images_2x_placeholder,
+        'target_images_4x_placeholder': target_images_4x_placeholder,
     }
 
 
@@ -67,13 +83,12 @@ def build_model(data):
 
     # NOTE: create the model
     model = model_perceptual.build_model(
-        data['source_images_placeholder'], data['target_images_placeholder'])
-
-    # NOTE: enhance the model with metrics
-    model['psnr'] = \
-        tf.image.psnr(model['logits'], model['labels'], max_val=1.0)
-    model['ssim'] = \
-        tf.image.ssim(model['logits'], model['labels'], max_val=1.0)
+        data['source_images_1x_placeholder'],
+        data['source_images_2x_placeholder'],
+        data['source_images_4x_placeholder'],
+        data['target_images_1x_placeholder'],
+        data['target_images_2x_placeholder'],
+        data['target_images_4x_placeholder'])
 
     # NOTE: enhance the model to train with larger batch and less GPU memory.
     #       to do so, we have to extract the pipeline of gradient descent so we
@@ -120,6 +135,7 @@ def search_learning_rate(session, experiment):
     # NOTE: feeds for computing gradients
     forward_feeds = {
         model['training']: True,
+#       model['loss_weight']: 0.9,
     }
 
     while True:
@@ -135,11 +151,14 @@ def search_learning_rate(session, experiment):
         # NOTE: compute gradients on nano batches
         for i in range(FLAGS.training_batch_size_multiplier):
             # NOTE: training data batch
-            source_images, target_images = \
-                data['training_dataset'].next_batch()
+            batch = data['training_dataset'].next_batch()
 
-            forward_feeds[model['images']] = source_images
-            forward_feeds[model['labels']] = target_images
+            forward_feeds[model['images_1x']] = batch['source_patches_1x']
+            forward_feeds[model['images_2x']] = batch['source_patches_2x']
+            forward_feeds[model['images_4x']] = batch['source_patches_4x']
+            forward_feeds[model['labels_1x']] = batch['target_patches_1x']
+            forward_feeds[model['labels_2x']] = batch['target_patches_2x']
+            forward_feeds[model['labels_4x']] = batch['target_patches_4x']
 
             loss, gradients = session.run(
                 [model['loss'], model['gradients_result']],
@@ -187,17 +206,29 @@ def train(session, experiment):
 
     all_gradients = []
 
+    # NOTE: loss weight
+    step = session.run(model['step'])
+#   step_begin = FLAGS.training_loss_weight_shifting_begin
+#   step_end = FLAGS.training_loss_weight_shifting_end
+#   weight = np.clip((step - step_begin) / (step_end - step_begin), 0.0, 1.0)
+#   weight = 0.9
+
     feeds = {
         model['training']: True,
+#       model['loss_weight']: weight,
     }
 
     # NOTE: compute gradients on nano batches
     for i in range(FLAGS.training_batch_size_multiplier):
         # NOTE: training data batch
-        source_images, target_images = data['training_dataset'].next_batch()
+        batch = data['training_dataset'].next_batch()
 
-        feeds[model['images']] = source_images
-        feeds[model['labels']] = target_images
+        feeds[model['images_1x']] = batch['source_patches_1x']
+        feeds[model['images_2x']] = batch['source_patches_2x']
+        feeds[model['images_4x']] = batch['source_patches_4x']
+        feeds[model['labels_1x']] = batch['target_patches_1x']
+        feeds[model['labels_2x']] = batch['target_patches_2x']
+        feeds[model['labels_4x']] = batch['target_patches_4x']
 
         loss, gradients = session.run(
             [model['loss'], model['gradients_result']], feed_dict=feeds)
@@ -207,8 +238,14 @@ def train(session, experiment):
         all_gradients.append(gradients)
 
     # NOTE: aggregate & apply gradients
+    step_begin = FLAGS.training_learning_rate_decay_begin
+    step_cycle = FLAGS.training_learning_rate_decay_cycle
+    decay_rate = FLAGS.training_learning_rate_decay_rate
+
+    decay_rate = decay_rate ** max(0, (step - step_begin) // step_cycle)
+
     feeds = {
-        model['learning_rate']: FLAGS.training_learning_rate,
+        model['learning_rate']: FLAGS.training_learning_rate * decay_rate,
     }
 
     for i, gradients_source in enumerate(model['gradients_source']):
@@ -247,86 +284,47 @@ def validate(session, experiment):
         return
 
     # NOTE: collect results of validation
-    # NOTE: gather only the first image batch to save storage
-    losses = 0.0
-    inputs = None
-    labels = None
-    logits = None
-    psnrs = 0.0
-    ssims = 0.0
+    validation_image = data['validation_image']
 
     feeds = {
         model['training']: False,
     }
 
-    fetch = {
-        'loss': model['loss'],
-        'psnr': model['psnr'],
-        'ssim': model['ssim']
-    }
+    for begin in range(0, validation_image.num_patches(), 32):
+        end = min(validation_image.num_patches(), begin + 32)
 
-    for i in range(FLAGS.validation_batch_size_multiplier):
-        # NOTE: only need images at the first batch
-        if i == 0:
-            fetch['inputs'] = model['images']
-            fetch['labels'] = model['labels']
-            fetch['logits'] = model['logits']
-        elif i == 1:
-            del fetch['inputs']
-            del fetch['labels']
-            del fetch['logits']
+        patches_1x, patches_2x, patches_4x = \
+            validation_image.get_source_patches(begin, end)
 
-        source_images, target_images = data['validation_dataset'].next_batch()
+        feeds[model['images_1x']] = patches_1x
+        feeds[model['images_2x']] = patches_2x
+        feeds[model['images_4x']] = patches_4x
 
-        feeds[model['images']] = source_images
-        feeds[model['labels']] = target_images
+        logits = session.run(model['logits_4x'], feed_dict=feeds)
 
-        fetched = session.run(fetch, feed_dict=feeds)
+        validation_image.set_result_patches(logits, begin)
 
-        losses += fetched['loss']
-        psnrs += np.mean(fetched['psnr'])
-        ssims += np.mean(fetched['ssim'])
+    # NOTE: image summary
+    image = validation_image.sample()
 
-        if i == 0:
-            inputs = fetched['inputs']
-            labels = fetched['labels']
-            logits = fetched['logits']
-
-    # NOTE: log validation loss, psnr & ssim
-    loss = losses / FLAGS.validation_batch_size_multiplier
-    psnr = psnrs / FLAGS.validation_batch_size_multiplier
-    ssim = ssims / FLAGS.validation_batch_size_multiplier
-
-    summary = tf.Summary(value=[
-        tf.Summary.Value(tag='validation_loss', simple_value=loss),
-        tf.Summary.Value(tag='validation_psnr', simple_value=psnr),
-        tf.Summary.Value(tag='validation_ssim', simple_value=ssim)])
-
-    experiment['scribe'].add_summary(summary, step)
-
-    # NOTE: log validation image set (LR - HR - SR)
-    # NOTE: concatenate on the second axis to make paired images side-by-side.
-    #       [batch_size, height, width + width + width, 3]
-    image = np.concatenate([inputs, labels, logits], axis=2)
-    image = np.concatenate(image, axis=0)
-
-    # NOTE: to uint8
-    image = np.clip(127.5 * image + 127.5, 0.0, 255.0)
-    image = image.astype(np.uint8)
-
-    # NOTE: to png stream
     image_stream = io.BytesIO()
 
     imageio.imwrite(image_stream, image, 'png')
 
-    image_summary = tf.Summary.Image(
+    image = tf.Summary.Image(
         encoded_image_string=image_stream.getvalue(),
         height=image.shape[0],
         width=image.shape[1])
 
+    summary_image = tf.Summary.Value(tag='validation_image', image=image)
+
+    # NOTE:
+    psnr = validation_image.psnr()
+
+    summary_psnr = tf.Summary.Value(tag='validation_psnr', simple_value=psnr)
+
     # NOTE: make image summary and add it
-    summary = tf.Summary(
-        value=[tf.Summary.Value(tag='validation_image', image=image_summary)])
+    summary = tf.Summary(value=[summary_image, summary_psnr])
 
     experiment['scribe'].add_summary(summary, step)
 
@@ -338,7 +336,9 @@ def test(session, experiment):
 
     data, model = experiment['data'], experiment['model']
 
-    if session.run(model['step']) != FLAGS.training_stop_step:
+    step = session.run(model['step'])
+
+    if step % FLAGS.testing_cycle != 0 and step != FLAGS.training_stop_step:
         return
 
     # NOTE: do test
@@ -353,32 +353,40 @@ def test(session, experiment):
 
     source_image_names = tf.gfile.ListDirectory(source_dir_path)
 
-    with zipfile.ZipFile(FLAGS.testing_result_path, 'w') as zipped_results:
+    testing_result_path = FLAGS.testing_result_path.replace(
+        '.zip', '_{}.zip'.format(step))
+
+    with zipfile.ZipFile(testing_result_path, 'w') as zipped_results:
         for name in source_image_names:
             print('testing: {}'.format(name))
 
             test_image = dataset.TestImage(
                 source_image_path=os.path.join(source_dir_path, name),
-                patch_size=128,
-                overlap_size=16)
+                target_image_path=None,
+                patch_size=FLAGS.testing_patch_size,
+                cover_size=FLAGS.testing_overlapping_size)
 
             time_book = time.time()
 
-            for begin in range(0, test_image.num_tiles(), 32):
-                end = min(test_image.num_tiles(), begin + 32)
+            for begin in range(0, test_image.num_patches(), 32):
+                end = min(test_image.num_patches(), begin + 32)
 
-                feeds[model['images']] = \
-                    test_image.get_low_resolution_tiles(begin, end)
+                patches_1x, patches_2x, patches_4x = \
+                    test_image.get_source_patches(begin, end)
 
-                logits = session.run(model['logits'], feed_dict=feeds)
+                feeds[model['images_1x']] = patches_1x
+                feeds[model['images_2x']] = patches_2x
+                feeds[model['images_4x']] = patches_4x
 
-                test_image.set_super_resolved_tiles(logits, begin)
+                logits = session.run(model['logits_4x'], feed_dict=feeds)
+
+                test_image.set_result_patches(logits, begin)
 
             time_cost += time.time() - time_book
 
             image_stream = io.BytesIO()
 
-            test_image.save_super_resolved_image(image_stream)
+            test_image.save_result_image(image_stream)
 
             zipped_results.writestr(name, image_stream.getvalue())
 
@@ -461,6 +469,16 @@ if __name__ == '__main__':
 
     tf.app.flags.DEFINE_integer('training_stop_step', 0, '')
 
+    tf.app.flags.DEFINE_integer('training_loss_weight_shifting_begin', 0, '')
+
+    tf.app.flags.DEFINE_integer('training_loss_weight_shifting_end', 0, '')
+
+    tf.app.flags.DEFINE_integer('training_learning_rate_decay_begin', 0, '')
+
+    tf.app.flags.DEFINE_integer('training_learning_rate_decay_cycle', 0, '')
+
+    tf.app.flags.DEFINE_float('training_learning_rate_decay_rate', 0, '')
+
     tf.app.flags.DEFINE_float('training_learning_rate', 0.0001, '')
 
     # NOTE: search proper learning rate base on training parameters (e.g.
@@ -496,7 +514,13 @@ if __name__ == '__main__':
     # NOTE:
     tf.app.flags.DEFINE_string('testing_image_source_dir_path', None, '')
 
+    tf.app.flags.DEFINE_integer('testing_cycle', 1000, '')
+
     tf.app.flags.DEFINE_integer('testing_batch_size', 0, '')
+
+    tf.app.flags.DEFINE_integer('testing_patch_size', 16, '')
+
+    tf.app.flags.DEFINE_integer('testing_overlapping_size', 0, '')
 
     tf.app.flags.DEFINE_string('testing_result_path', None, '')
 
