@@ -219,7 +219,9 @@ def train(session, experiment):
     }
 
     # NOTE: compute gradients on nano batches
-    for i in range(FLAGS.training_batch_size_multiplier):
+    batch_size_multiplier = FLAGS.training_batch_size_multiplier
+
+    for i in range(batch_size_multiplier):
         # NOTE: training data batch
         batch = data['training_dataset'].next_batch()
 
@@ -256,7 +258,7 @@ def train(session, experiment):
     # NOTE: apply aggregated gradients to gradient descent
     session.run(model['optimizer'], feed_dict=feeds)
 
-    loss = losses / FLAGS.training_batch_size_multiplier
+    loss = losses / batch_size_multiplier
 
     step = session.run(model['step'])
 
@@ -409,6 +411,22 @@ def test(session, experiment):
         zipped_results.writestr('readme.txt', readme_stream.getvalue())
 
 
+def save(session, experiment):
+    """
+    """
+    FLAGS = tf.app.flags.FLAGS
+
+    model = experiment['model']
+
+    step = session.run(model['step'])
+
+    # NOTE:
+    if step % FLAGS.save_cycle == 0:
+        target_ckpt_path = os.path.join(FLAGS.checkpoint_path, 'model.ckpt')
+
+        tf.train.Saver().save(session, target_ckpt_path, global_step=step)
+
+
 def train_validate_test(session, experiment):
     """
     """
@@ -416,8 +434,23 @@ def train_validate_test(session, experiment):
 
     model = experiment['model']
 
+    source_ckpt_path = tf.train.latest_checkpoint(FLAGS.checkpoint_path)
+
+    if source_ckpt_path is None:
+        session.run(tf.global_variables_initializer())
+    else:
+        tf.train.Saver().restore(session, source_ckpt_path)
+
+    step = session.run(model['step'])
+
+    # NOTE: exclude log which does not happend yet :)
+    experiment['scribe'].add_session_log(
+        tf.SessionLog(status=tf.SessionLog.START), global_step=step)
+
     while session.run(model['step']) < FLAGS.training_stop_step:
         train(session, experiment)
+
+        save(session, experiment)
 
         validate(session, experiment)
 
@@ -523,6 +556,9 @@ if __name__ == '__main__':
     tf.app.flags.DEFINE_integer('testing_overlapping_size', 0, '')
 
     tf.app.flags.DEFINE_string('testing_result_path', None, '')
+
+    # NOTE:
+    tf.app.flags.DEFINE_integer('save_cycle', 1000, '')
 
     # NOTE:
     tf.logging.set_verbosity(tf.logging.INFO)
