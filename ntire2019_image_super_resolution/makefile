@@ -75,6 +75,17 @@ train:
 		--testing_result_path=$(EXP_TRAIN_TESTING_RESULT_PATH) \
 		--save_cycle=$(EXP_TRAIN_SAVE_CYCLE)
 
+
+test:
+	mkdir -p ./results/
+	python3 experiment_test.py \
+		--checkpoint_path=./checkpoints/model.ckpt-130000 \
+		--testing_image_source_dir_path=./Test_LR/ \
+		--testing_patch_size=$(EXP_TRAIN_TESTING_PATCH_SIZE) \
+		--testing_overlapping_size=$(EXP_TRAIN_TESTING_OVERLAPPING_SIZE) \
+		--testing_result_path=./results/results.zip
+
+
 search-learning-rate: EXP_TRAIN_SUMMARY_PATH=$(PATH_PROJECT)summary/lrs_$(EXP_NAME)/
 search-learning-rate: EXP_TRAIN_TRAINING_LRS_STOP_STEP=10000
 search-learning-rate: EXP_TRAIN_TRAINING_LRS_INITIAL_RATE=0.0
